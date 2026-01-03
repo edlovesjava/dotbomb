@@ -2,6 +2,17 @@
 
 A simplified Space Invaders game for ATTiny85 (or Arduino) with MAX7219 8x8 LED Matrix.
 
+![Game Type](https://img.shields.io/badge/Game-Space%20Invaders-blue)
+![Platform](https://img.shields.io/badge/Platform-ATTiny85%20%7C%20Arduino-green)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+## Quick Links
+
+- 🚀 **[Quick Start Guide](QUICKSTART.md)** - Get playing in 5 minutes!
+- 🔧 **[Hardware Details](HARDWARE.md)** - Circuit diagrams and specs
+- 🛒 **[Parts List](PARTS_LIST.md)** - What to buy and where
+- 🔍 **[Troubleshooting](TROUBLESHOOTING.md)** - Fix common issues
+
 ## Overview
 
 DotInvaders is a minimalist version of the classic Space Invaders arcade game, designed to run on an 8x8 LED matrix. Control your ship at the bottom of the screen, shoot at the invading aliens, and try to destroy them all before they reach you!
