@@ -1,6 +1,6 @@
-# Dot Invaders
+# DOTinvaders
 
-A simple ATTiny85 game with the MAX7219 8x8 LED matrix inspired by Space Invaders.
+A Space Invaders clone for the [DOTplatform](https://github.com/edlovesjava/DOTplatform) handheld gaming system.
 
 ## Game Description
 
@@ -44,25 +44,12 @@ Controls:
 
 ## Hardware
 
-This game uses the same hardware setup as the [dotris](https://github.com/edlovesjava/dotris) project:
+This game runs on the **DOTplatform** handheld:
+- ATtiny85 + MAX7219 + 8x8 LED matrix
+- 2 buttons with chord detection (3 inputs)
+- USB programmable
 
-### Components
-- **ATtiny85** microcontroller
-- **8x8 LED Matrix** with MAX7219 driver
-- **2 Push Buttons** (left and right movement)
-- **5V Power Supply** (USB or battery)
-
-### Pin Configuration
-
-| ATtiny85 Pin | Arduino Pin | Function | Connected To |
-|--------------|-------------|----------|--------------|
-| PB0 (Pin 5)  | D0          | DATA     | MAX7219 DIN  |
-| PB1 (Pin 6)  | D1          | CLK      | MAX7219 CLK  |
-| PB2 (Pin 7)  | D2          | CS       | MAX7219 CS   |
-| PB3 (Pin 2)  | D3          | BTN_RIGHT| Right Button |
-| PB4 (Pin 3)  | D4          | BTN_LEFT | Left Button  |
-| VCC (Pin 8)  | VCC         | Power    | +5V          |
-| GND (Pin 4)  | GND         | Ground   | GND          |
+See [DOTplatform Hardware Spec](https://github.com/edlovesjava/DOTplatform/blob/main/hardware/SPEC.md) for full details.
 
 ## Controls
 
@@ -117,6 +104,7 @@ For detailed testing and troubleshooting, see [TESTING.md](TESTING.md).
 
 MIT License - Feel free to modify and share!
 
-## Credits
+## Related Projects
 
-Hardware setup based on [dotris](https://github.com/edlovesjava/dotris) by edlovesjava.
+- [DOTplatform](https://github.com/edlovesjava/DOTplatform) - The hardware platform and game framework
+- [DOTris](https://github.com/edlovesjava/DOTris) - Tetris clone for DOTplatform
