@@ -44,6 +44,12 @@ uint8_t lastButtonState = 0;  // 0=none, 1=left, 2=right
 const uint16_t KEY_REPEAT_DELAY = 250;  // Initial delay before repeat starts (ms)
 const uint16_t KEY_REPEAT_RATE = 50;    // Repeat interval once holding (ms)
 
+// A/B Test: Continue movement after fire-while-moving?
+// true  = resume key repeat seamlessly after tap-to-fire
+// false = reset key repeat delay after firing
+const bool CONTINUE_MOVE_AFTER_FIRE = true;
+uint8_t preFireButtonState = 0;  // Track which button was held before firing
+
 // Send a byte to MAX7219 via bit-banged SPI
 void sendByte(uint8_t b) {
   for (int i = 7; i >= 0; i--) {
@@ -138,7 +144,10 @@ void loop() {
   bool firePressed = rightPressed && leftPressed;
 
   if (firePressed && !lastFireState && !bulletActive) {
-    // Fire a bullet
+    // Fire a bullet - remember what direction we were moving
+    if (CONTINUE_MOVE_AFTER_FIRE) {
+      preFireButtonState = lastButtonState;
+    }
     bulletActive = true;
     bulletCol = gunPos;
     bulletRow = 6;  // Start just above the gun
@@ -154,10 +163,26 @@ void loop() {
     if (currentButton != 0) {
       bool shouldMove = false;
 
-      if (currentButton != lastButtonState) {
+      // Check if we're resuming movement after firing
+      bool resumingAfterFire = CONTINUE_MOVE_AFTER_FIRE &&
+                                preFireButtonState != 0 &&
+                                currentButton == preFireButtonState;
+
+      if (resumingAfterFire) {
+        // Continue where we left off - don't reset timer, don't move immediately
+        // Just keep counting from where we were
+        preFireButtonState = 0;  // Clear the flag
+        keyHoldTimer++;
+        if (keyHoldTimer >= KEY_REPEAT_DELAY) {
+          if ((keyHoldTimer - KEY_REPEAT_DELAY) % KEY_REPEAT_RATE == 0) {
+            shouldMove = true;
+          }
+        }
+      } else if (currentButton != lastButtonState) {
         // New button press - move immediately
         shouldMove = true;
         keyHoldTimer = 0;
+        preFireButtonState = 0;
       } else {
         // Button held - check for repeat
         keyHoldTimer++;
@@ -185,6 +210,7 @@ void loop() {
       // No button pressed - reset state
       lastButtonState = 0;
       keyHoldTimer = 0;
+      preFireButtonState = 0;
     }
   }
   
@@ -273,6 +299,7 @@ void gameOver() {
   bulletMoveCounter = 0;
   keyHoldTimer = 0;
   lastButtonState = 0;
+  preFireButtonState = 0;
   spawnInvader();
   delay(500);
 }
