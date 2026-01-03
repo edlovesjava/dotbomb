@@ -1,5 +1,88 @@
 # Wave System Design Plan
 
+## ATtiny85 Hardware Budget
+
+### Specifications
+| Resource | Total | Current Use | Available | After Wave System |
+|----------|-------|-------------|-----------|-------------------|
+| **Flash** | 8,192 bytes | ~2,500* | ~5,700 | ~3,000 (+500) |
+| **SRAM** | 512 bytes | ~86 | ~426 | ~140 (+54) |
+| **EEPROM** | 512 bytes | 0 | 512 | 0 (or 2 for high score) |
+| **CPU** | 8 MHz | ~5% | 95% | ~8% |
+| **Power** | Battery | Low | N/A | Minimal impact |
+
+*Estimated - actual requires compilation with avr-gcc
+
+### Current SRAM Usage Analysis
+
+```
+Global Variables (26 bytes):
+  matrix[8]           8 bytes   Display buffer
+  gunPos              1 byte    Gun position
+  invaderCol          1 byte    Invader X
+  invaderRow          1 byte    Invader Y
+  bulletActive        1 byte    Bullet state
+  bulletCol           1 byte    Bullet X
+  bulletRow           1 byte    Bullet Y
+  score               2 bytes   Current score
+  speed               1 byte    Current speed level
+  invaderDropCounter  2 bytes   Drop timing
+  bulletMoveCounter   2 bytes   Bullet timing
+  lastFireState       1 byte    Fire debounce
+  keyHoldTimer        2 bytes   Key repeat timing
+  lastButtonState     1 byte    Movement state
+  preFireButtonState  1 byte    Fire-while-moving
+
+Constants (may be in flash): ~10 bytes
+Stack (function calls):      ~50 bytes
+                             ___________
+Estimated current total:     ~86 bytes (17% of 512)
+```
+
+### Wave System Additions
+
+```
+New Global Variables (+20 bytes):
+  invaders[4] (col, row, active)  12 bytes  Multi-invader array
+  currentWave                      1 byte   Wave index
+  waveKills                        1 byte   Kills in current wave
+  spawnCounter                     2 bytes  Spawn timing
+  spawnInterval (runtime)          2 bytes  Current spawn rate
+  dropInterval (runtime)           2 bytes  Current gravity
+
+Removed Variables (-4 bytes):
+  invaderCol                      -1 byte   Replaced by array
+  invaderRow                      -1 byte   Replaced by array
+  speed                           -1 byte   Replaced by wave system
+  (invaderDropInterval local)     -2 bytes  Now global
+
+Wave Config Table (PROGMEM = Flash, 0 SRAM):
+  8 waves × 6 bytes = 48 bytes Flash
+
+Net SRAM change: +16 bytes
+New total: ~102 bytes (20% of 512)
+```
+
+### CPU Impact Analysis
+
+| Operation | Current | After | Notes |
+|-----------|---------|-------|-------|
+| Draw loop | O(1) | O(4) | Loop through 4 invaders |
+| Collision | O(1) | O(4) | Check each invader |
+| Spawn check | N/A | O(4) | Count active invaders |
+| Main loop | ~1ms | ~1.5ms | Still well under 16ms frame |
+
+**Verdict:** Negligible CPU impact. 8MHz handles this easily.
+
+### Power Considerations
+
+- LED matrix is the main power draw (controlled by MAX7219)
+- Additional code has minimal power impact
+- No sleep mode changes needed
+- Battery life unchanged
+
+---
+
 ## Current State
 - Single invader at a time
 - Linear speed increase with each kill
@@ -16,22 +99,34 @@
 
 ## Proposed Architecture
 
-### Invader Storage (Memory: ~25 bytes)
+### Invader Storage
 
+**Option A: Struct with active flag (12 bytes)**
 ```cpp
-// Max simultaneous invaders (memory constrained)
 #define MAX_INVADERS 4
 
 struct Invader {
   uint8_t col;    // 0-7
-  uint8_t row;    // 0-7 (255 = inactive)
-  bool active;
+  uint8_t row;    // 0-7
+  bool active;    // true/false
 };
-
-Invader invaders[MAX_INVADERS];  // 12 bytes
+Invader invaders[MAX_INVADERS];
 ```
 
-**Alternative (smaller):** Use `row = 255` as inactive marker, skip `active` bool.
+**Option B: Packed, no active flag (8 bytes) - RECOMMENDED**
+```cpp
+#define MAX_INVADERS 4
+#define INVADER_INACTIVE 255
+
+uint8_t invaderCols[MAX_INVADERS];  // 4 bytes
+uint8_t invaderRows[MAX_INVADERS];  // 4 bytes (255 = inactive)
+```
+
+Benefits of Option B:
+- 4 bytes smaller (8 vs 12)
+- Simpler iteration (no struct access)
+- `row == 255` means inactive (can't be on row 255 anyway)
+- Parallel arrays are cache-friendly (though irrelevant on ATtiny)
 
 ### Wave Configuration
 
@@ -141,18 +236,24 @@ void checkGameOver() {
 
 ---
 
-## Memory Budget (ATtiny85: 512 bytes RAM)
+## Budget Validation Checklist
 
-| Item | Bytes |
-|------|-------|
-| Invaders array (4 × 3) | 12 |
-| Wave state variables | 8 |
-| Existing game state | ~30 |
-| Matrix buffer | 8 |
-| Stack/locals | ~50 |
-| **Total estimated** | **~108** |
+Before implementing, verify:
 
-Plenty of headroom.
+- [x] **SRAM:** 102 bytes used / 512 available = 20% ✓
+- [x] **Flash:** ~3,000 bytes / 8,192 available = 37% ✓
+- [x] **EEPROM:** 0-2 bytes (optional high score) ✓
+- [x] **CPU:** <10% utilization at 8MHz ✓
+- [x] **Power:** No additional drain beyond existing ✓
+
+### Risk Assessment
+
+| Risk | Likelihood | Mitigation |
+|------|------------|------------|
+| Stack overflow | Low | Keep functions shallow, avoid recursion |
+| Flash overflow | Very Low | 5KB+ headroom |
+| Timing issues | Low | Test on hardware, adjust intervals |
+| PROGMEM read issues | Medium | Use pgm_read_* macros correctly |
 
 ---
 
