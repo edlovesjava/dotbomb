@@ -12,6 +12,36 @@ Dot Invaders is a minimalist space shooter game where:
 - Score increases with each hit, and the game gets progressively faster
 - Game over occurs if an invader reaches the bottom row
 
+## Game Visualization
+
+```
+8x8 LED Matrix Display:
+
+┌────────────────┐
+│ · · ● · · · · ·│  Row 0 - Invader spawns here
+│ · · · · · · · ·│  Row 1
+│ · · · · · · · ·│  Row 2
+│ · · ○ · · · · ·│  Row 3 - Bullet traveling up
+│ · · ▼ · · · · ·│  Row 4 - Invader descending
+│ · · · · · · · ·│  Row 5
+│ · · · · · · · ·│  Row 6
+│ · · ▲ · · · · ·│  Row 7 - Your gun (bottom)
+└────────────────┘
+
+Legend:
+▲ = Gun (you)
+▼ = Invader (enemy)
+○ = Bullet (your shot)
+● = Target position
+
+Controls:
+[LEFT] = Move gun right*
+[RIGHT] = Move gun left*
+[LEFT + RIGHT] = Fire!
+
+*Button labels reversed due to hardware wiring
+```
+
 ## Hardware
 
 This game uses the same hardware setup as the [dotris](https://github.com/edlovesjava/dotris) project:
@@ -71,6 +101,8 @@ This game uses the same hardware setup as the [dotris](https://github.com/edlove
 7. If an invader reaches the bottom, the game is over
 8. After game over, your score is displayed (number of filled rows)
 9. The game automatically resets after a short delay
+
+For detailed testing and troubleshooting, see [TESTING.md](TESTING.md).
 
 ## Game Mechanics
 
