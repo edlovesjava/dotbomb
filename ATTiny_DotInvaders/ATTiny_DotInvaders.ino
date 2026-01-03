@@ -36,8 +36,13 @@ uint8_t speed = 1;
 // Timing variables
 uint16_t invaderDropCounter = 0;
 uint16_t bulletMoveCounter = 0;
-uint16_t buttonDebounceTimer = 0;
 bool lastFireState = false;
+
+// Key repeat variables
+uint16_t keyHoldTimer = 0;
+uint8_t lastButtonState = 0;  // 0=none, 1=left, 2=right
+const uint16_t KEY_REPEAT_DELAY = 250;  // Initial delay before repeat starts (ms)
+const uint16_t KEY_REPEAT_RATE = 50;    // Repeat interval once holding (ms)
 
 // Send a byte to MAX7219 via bit-banged SPI
 void sendByte(uint8_t b) {
@@ -100,7 +105,6 @@ void spawnInvader() {
 void loop() {
   uint16_t invaderDropInterval = 300 - (speed * 10);  // Gets faster with score
   uint16_t bulletMoveInterval = 30;  // Fast bullet movement
-  uint16_t moveInterval = 100;  // Button response rate
   
   // Clear matrix for fresh frame
   for (uint8_t i = 0; i < 8; i++) matrix[i] = 0;
@@ -127,31 +131,61 @@ void loop() {
   delay(1);
   
   // Handle button input for gun movement and firing
-  buttonDebounceTimer++;
-  if (buttonDebounceTimer >= moveInterval) {
-    buttonDebounceTimer = 0;
-    
-    bool rightPressed = (digitalRead(RIGHT_BUTTON) == LOW);
-    bool leftPressed = (digitalRead(LEFT_BUTTON) == LOW);
-    
-    // Chording both buttons fires a bullet
-    bool firePressed = rightPressed && leftPressed;
-    
-    if (firePressed && !lastFireState && !bulletActive) {
-      // Fire a bullet
-      bulletActive = true;
-      bulletCol = gunPos;
-      bulletRow = 6;  // Start just above the gun
-    } else if (!firePressed) {
-      // Move gun left or right (only if not chording)
-      if (leftPressed && gunPos < 7) {
-        gunPos++;
-      } else if (rightPressed && gunPos > 0) {
-        gunPos--;
+  bool rightPressed = (digitalRead(RIGHT_BUTTON) == LOW);
+  bool leftPressed = (digitalRead(LEFT_BUTTON) == LOW);
+
+  // Chording both buttons fires a bullet
+  bool firePressed = rightPressed && leftPressed;
+
+  if (firePressed && !lastFireState && !bulletActive) {
+    // Fire a bullet
+    bulletActive = true;
+    bulletCol = gunPos;
+    bulletRow = 6;  // Start just above the gun
+  }
+  lastFireState = firePressed;
+
+  // Handle movement with key repeat (only if not firing)
+  if (!firePressed) {
+    uint8_t currentButton = 0;
+    if (leftPressed) currentButton = 1;
+    else if (rightPressed) currentButton = 2;
+
+    if (currentButton != 0) {
+      bool shouldMove = false;
+
+      if (currentButton != lastButtonState) {
+        // New button press - move immediately
+        shouldMove = true;
+        keyHoldTimer = 0;
+      } else {
+        // Button held - check for repeat
+        keyHoldTimer++;
+        if (keyHoldTimer == KEY_REPEAT_DELAY) {
+          // Initial repeat after delay
+          shouldMove = true;
+        } else if (keyHoldTimer > KEY_REPEAT_DELAY) {
+          // Continuous repeat at faster rate
+          if ((keyHoldTimer - KEY_REPEAT_DELAY) % KEY_REPEAT_RATE == 0) {
+            shouldMove = true;
+          }
+        }
       }
+
+      if (shouldMove) {
+        if (currentButton == 1 && gunPos < 7) {
+          gunPos++;  // Move left
+        } else if (currentButton == 2 && gunPos > 0) {
+          gunPos--;  // Move right
+        }
+      }
+
+      lastButtonState = currentButton;
+    } else {
+      // No button pressed - reset state
+      lastButtonState = 0;
+      keyHoldTimer = 0;
     }
-    
-    lastFireState = firePressed;
   }
   
   // Move invader down
@@ -237,6 +271,8 @@ void gameOver() {
   bulletActive = false;
   invaderDropCounter = 0;
   bulletMoveCounter = 0;
+  keyHoldTimer = 0;
+  lastButtonState = 0;
   spawnInvader();
   delay(500);
 }
