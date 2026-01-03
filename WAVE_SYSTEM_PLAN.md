@@ -399,6 +399,61 @@ Before implementing, verify:
 
 ## Implementation Phases
 
+### Phase 0: Single-Invader Core Gameplay (BUILD & TEST FIRST)
+
+Get the base game feeling right before adding multi-invader complexity.
+
+**Constraints:**
+- Single invader at a time
+- Single bullet active (miss = wait for bullet to exit screen)
+- Random spawn column for each new invader
+
+**Features to add:**
+- [ ] Lives system (3 lives)
+- [ ] Incremental speed increase (every N kills)
+- [ ] Score multiplier (increases with speed/level)
+- [ ] Level-up flash effect
+- [ ] Difficulty curve tuning
+
+**Difficulty Progression (single invader):**
+```cpp
+// Speed levels for single-invader phase
+const uint16_t speedLevels[] PROGMEM = {
+  400,  // Level 1: slow
+  350,  // Level 2
+  300,  // Level 3
+  260,  // Level 4
+  230,  // Level 5
+  200,  // Level 6
+  180,  // Level 7
+  160,  // Level 8+: max speed
+};
+#define KILLS_PER_LEVEL 5
+#define NUM_SPEED_LEVELS 8
+```
+
+**Score multiplier:** Level N = Nx points per kill
+
+**Missed shot penalty:** Must wait ~200ms for bullet to travel off screen before firing again. This creates tension - do you take the shot or wait for better alignment?
+
+**SRAM additions for Phase 0:**
+```
+lives              1 byte
+currentLevel       1 byte
+levelKills         1 byte
+scoreMultiplier    1 byte (or calculate from level)
+                   _______
+Net addition:      ~3-4 bytes
+```
+
+**Playtest goals:**
+- [ ] Does speed curve feel fair?
+- [ ] Is 3 lives too many/few?
+- [ ] Does missed-shot-wait feel punishing or strategic?
+- [ ] Is score multiplier motivating?
+
+---
+
 ### Phase 1: Multi-Invader Support
 - [ ] Add invaderCols[4] and invaderRows[4] arrays
 - [ ] Update draw loop for multiple invaders
@@ -425,17 +480,25 @@ Before implementing, verify:
 
 ## Summary
 
-All design decisions finalized:
+### Development Approach: Iterative Build & Test
+
+| Phase | Focus | Test Before Proceeding |
+|-------|-------|------------------------|
+| **Phase 0** | Single invader, lives, speed curve, multiplier | Core feel right? |
+| Phase 1 | Multi-invader arrays, collision | Mechanics work? |
+| Phase 2 | Wave config, spawning, transitions | Progression fun? |
+| Phase 3 | Final tuning, polish | Ready for release? |
+
+### Phase 0 Features (Single Invader)
 
 | Feature | Status |
 |---------|--------|
-| Multi-invader (max 4) | Ready to implement |
-| Wave progression (8 waves) | Designed |
-| Lives system (3 lives) | Designed |
-| Score multiplier (1-5x) | Designed |
-| Wave flash effect | Designed |
-| Gradual spawning | Designed |
-| Endgame loop | Final wave repeats |
+| Single invader, single bullet | Current behavior |
+| Lives system (3 lives) | To implement |
+| Incremental speed (8 levels) | To implement |
+| Score multiplier (1-8x) | To implement |
+| Level-up flash effect | To implement |
+| Missed shot = wait for bullet | Current behavior |
 
 **Hardware budget: ✓ All resources within limits**
 
@@ -443,6 +506,11 @@ All design decisions finalized:
 
 ## Next Step
 
-**Approve to begin Phase 1 implementation** - multi-invader support with basic mechanics.
+**Approve to begin Phase 0 implementation:**
+1. Add lives system
+2. Add level-based speed progression
+3. Add score multiplier
+4. Add level-up flash effect
+5. Playtest and tune
 
-Estimated code size increase: ~300-400 bytes (well within ATtiny85's 8KB flash).
+Estimated code size increase: ~150-200 bytes.
