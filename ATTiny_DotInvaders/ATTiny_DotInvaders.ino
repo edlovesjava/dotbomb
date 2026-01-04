@@ -1,23 +1,17 @@
+// DOTinvaders v2 - Wave Invasion
+// Multiple invaders with staggered descent and trickle spawn
+
 #include <avr/pgmspace.h>
 
 // MAX7219 Register Addresses
 #define MAX7219_REG_NOOP 0x00
-#define MAX7219_REG_DIGIT0 0x01
-#define MAX7219_REG_DIGIT1 0x02
-#define MAX7219_REG_DIGIT2 0x03
-#define MAX7219_REG_DIGIT3 0x04
-#define MAX7219_REG_DIGIT4 0x05
-#define MAX7219_REG_DIGIT5 0x06
-#define MAX7219_REG_DIGIT6 0x07
-#define MAX7219_REG_DIGIT7 0x08
-
 #define MAX7219_REG_DECODE_MODE 0x09
-#define MAX7219_REG_INTENSITY 0x0A  // brightness 0-15
+#define MAX7219_REG_INTENSITY 0x0A
 #define MAX7219_REG_SCAN_LIMIT 0x0B
 #define MAX7219_REG_SHUTDOWN 0x0C
 #define MAX7219_REG_DISPLAY_TEST 0x0F
 
-// Pin definitions (based on dotris hardware)
+// Pin definitions
 const uint8_t DIN = 0;
 const uint8_t CLK = 1;
 const uint8_t CS = 2;
@@ -26,53 +20,66 @@ const uint8_t LEFT_BUTTON = 4;
 
 // Game configuration
 #define STARTING_LIVES 3
-#define KILLS_PER_LEVEL 5
+#define MAX_INVADERS 8
 #define NUM_SPEED_LEVELS 8
 
-// Speed levels (drop interval in ms) - stored in PROGMEM to save RAM
+// Speed levels (drop interval in ms) - stored in PROGMEM
 const uint16_t speedLevels[] PROGMEM = {
-  400,  // Level 1: slow
-  350,  // Level 2
-  300,  // Level 3
-  260,  // Level 4
-  230,  // Level 5
-  200,  // Level 6
-  180,  // Level 7
-  160,  // Level 8+: max speed
+  400, 350, 300, 260, 230, 200, 180, 160
+};
+
+// Wave configuration (invaders per wave) - stored in PROGMEM
+const uint8_t waveInvaders[] PROGMEM = {
+  3, 4, 5, 5, 6, 6, 7, 8  // Waves 1-8, wave 9+ stays at 8
+};
+
+// Spawn delay per wave (ms) - stored in PROGMEM
+const uint16_t waveSpawnDelay[] PROGMEM = {
+  600, 550, 500, 450, 400, 350, 300, 250  // Gets faster each wave
+};
+
+// Invader structure
+struct Invader {
+  int8_t col;           // -1 = inactive, 0-7 = column
+  uint8_t row;          // 0-7 row position
+  uint16_t dropTimer;   // Individual drop timer
+  uint16_t dropDelay;   // Randomized drop interval
 };
 
 // Game state
 byte matrix[8];
-uint8_t gunPos = 3;  // Gun position at bottom row (column 0-7)
-uint8_t invaderCol = 0;  // Invader column position
-uint8_t invaderRow = 0;  // Invader row position
+uint8_t gunPos = 3;
+Invader invaders[MAX_INVADERS];
 bool bulletActive = false;
 uint8_t bulletCol = 0;
 uint8_t bulletRow = 0;
 uint16_t score = 0;
 
-// Level progression
-uint8_t lives = STARTING_LIVES;
-uint8_t currentLevel = 1;
-uint8_t levelKills = 0;
+// Wave state
+uint8_t waveNumber = 1;
+uint8_t invadersToSpawn = 0;    // How many left to spawn this wave
+uint8_t invadersActive = 0;     // Currently on screen
+uint16_t spawnTimer = 0;        // Timer for trickle spawn
 
-// Timing variables
-uint16_t invaderDropCounter = 0;
+// Lives and progression
+uint8_t lives = STARTING_LIVES;
+
+// Timing
 uint16_t bulletMoveCounter = 0;
 bool lastFireState = false;
 
-// Key repeat variables
+// Key repeat
 uint16_t keyHoldTimer = 0;
-uint8_t heldButton = 0;  // 0=none, 1=left, 2=right - currently held for repeat
-const uint16_t KEY_REPEAT_DELAY = 250;  // Initial delay before repeat starts (ms)
-const uint16_t KEY_REPEAT_RATE = 50;    // Repeat interval once holding (ms)
+uint8_t heldButton = 0;
+const uint16_t KEY_REPEAT_DELAY = 250;
+const uint16_t KEY_REPEAT_RATE = 50;
 
-// Button state tracking for release detection
+// Button state
 bool lastLeftPressed = false;
 bool lastRightPressed = false;
-bool chordedThisPress = false;  // True if we fired during this button hold
+bool chordedThisPress = false;
 
-// Send a byte to MAX7219 via bit-banged SPI
+// Send byte via bit-banged SPI
 void sendByte(uint8_t b) {
   for (int i = 7; i >= 0; i--) {
     digitalWrite(CLK, LOW);
@@ -89,41 +96,127 @@ void sendCmd(uint8_t addr, uint8_t data) {
   digitalWrite(CS, HIGH);
 }
 
-// Update entire display from matrix buffer
+// Update display
 void updateDisplay() {
   for (uint8_t row = 0; row < 8; row++) {
     sendCmd(row + 1, matrix[row]);
   }
 }
 
-// Get current drop interval based on level (reads from PROGMEM)
-uint16_t getDropInterval() {
-  uint8_t idx = currentLevel - 1;
-  if (idx >= NUM_SPEED_LEVELS) idx = NUM_SPEED_LEVELS - 1;
+// Get speed level for current wave
+uint8_t getSpeedLevel() {
+  if (waveNumber >= NUM_SPEED_LEVELS) return NUM_SPEED_LEVELS - 1;
+  return waveNumber - 1;
+}
+
+// Get base drop interval for current wave
+uint16_t getBaseDropInterval() {
+  uint8_t idx = getSpeedLevel();
   return pgm_read_word(&speedLevels[idx]);
 }
 
-// Level-up flash effect
-void flashLevelUp() {
-  for (uint8_t i = 0; i < 3; i++) {
-    for (uint8_t row = 0; row < 8; row++) {
-      sendCmd(row + 1, 0xFF);
+// Get spawn delay for current wave
+uint16_t getSpawnDelay() {
+  uint8_t idx = waveNumber - 1;
+  if (idx >= NUM_SPEED_LEVELS) idx = NUM_SPEED_LEVELS - 1;
+  return pgm_read_word(&waveSpawnDelay[idx]);
+}
+
+// Get invader count for wave
+uint8_t getWaveInvaderCount() {
+  uint8_t idx = waveNumber - 1;
+  if (idx >= NUM_SPEED_LEVELS) idx = NUM_SPEED_LEVELS - 1;
+  return pgm_read_byte(&waveInvaders[idx]);
+}
+
+// Flash effect for wave start
+void flashWaveStart() {
+  // Show wave number as columns lit
+  for (uint8_t i = 0; i < 8; i++) matrix[i] = 0;
+  uint8_t cols = waveNumber;
+  if (cols > 8) cols = 8;
+  for (uint8_t c = 0; c < cols; c++) {
+    for (uint8_t r = 0; r < 8; r++) {
+      matrix[r] |= (1 << c);
     }
-    delay(50);
-    for (uint8_t row = 0; row < 8; row++) {
-      sendCmd(row + 1, 0x00);
-    }
-    delay(50);
+  }
+  updateDisplay();
+  delay(500);
+
+  // Flash
+  for (uint8_t i = 0; i < 2; i++) {
+    for (uint8_t r = 0; r < 8; r++) sendCmd(r + 1, 0xFF);
+    delay(100);
+    for (uint8_t r = 0; r < 8; r++) sendCmd(r + 1, 0x00);
+    delay(100);
   }
 }
 
-// Show remaining lives (flash N times)
+// Initialize a new wave
+void startWave() {
+  // Clear all invaders
+  for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+    invaders[i].col = -1;
+  }
+
+  invadersToSpawn = getWaveInvaderCount();
+  invadersActive = 0;
+  spawnTimer = 0;
+
+  flashWaveStart();
+}
+
+// Find empty invader slot
+int8_t findEmptySlot() {
+  for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+    if (invaders[i].col == -1) return i;
+  }
+  return -1;
+}
+
+// Check if column is occupied at row 0
+bool columnOccupied(uint8_t col) {
+  for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+    if (invaders[i].col == col && invaders[i].row <= 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Spawn single invader (trickle)
+void spawnOneInvader() {
+  if (invadersToSpawn == 0) return;
+
+  int8_t slot = findEmptySlot();
+  if (slot == -1) return;
+
+  // Find unoccupied column
+  uint8_t col;
+  uint8_t attempts = 0;
+  do {
+    col = random(0, 8);
+    attempts++;
+  } while (columnOccupied(col) && attempts < 16);
+
+  invaders[slot].col = col;
+  invaders[slot].row = 0;
+  invaders[slot].dropTimer = 0;
+  // Randomize drop delay slightly for stagger effect
+  uint16_t baseDelay = getBaseDropInterval();
+  invaders[slot].dropDelay = baseDelay + random(0, baseDelay / 2);
+
+  invadersToSpawn--;
+  invadersActive++;
+}
+
+// Show remaining lives
 void showLivesRemaining() {
   for (uint8_t i = 0; i < lives; i++) {
-    for (uint8_t row = 0; row < 8; row++) matrix[row] = 0xFF;
+    for (uint8_t r = 0; r < 8; r++) matrix[r] = 0xFF;
     updateDisplay();
     delay(200);
-    for (uint8_t row = 0; row < 8; row++) matrix[row] = 0x00;
+    for (uint8_t r = 0; r < 8; r++) matrix[r] = 0x00;
     updateDisplay();
     delay(200);
   }
@@ -133,27 +226,32 @@ void showLivesRemaining() {
 // Forward declaration
 void gameOver();
 
-// Lose a life - returns true if game continues, false if game over
-bool loseLife() {
-  lives--;
-
-  if (lives == 0) {
-    gameOver();
-    return false;
+// Deactivate invader that reached bottom
+void invaderReachedBottom(uint8_t idx) {
+  // Flash the row
+  for (uint8_t i = 0; i < 3; i++) {
+    sendCmd(8, 0xFF);  // Row 7
+    delay(50);
+    sendCmd(8, 0x00);
+    delay(50);
   }
 
-  // Show remaining lives
-  showLivesRemaining();
+  invaders[idx].col = -1;
+  invadersActive--;
 
-  // Reset invader position
-  invaderCol = random(0, 8);
-  invaderRow = 0;
-  invaderDropCounter = 0;
-
-  return true;
+  lives--;
+  if (lives == 0) {
+    gameOver();
+  } else {
+    showLivesRemaining();
+  }
 }
 
-// Initialize MAX7219
+// Check if wave is complete
+bool waveComplete() {
+  return (invadersToSpawn == 0 && invadersActive == 0);
+}
+
 void setup() {
   pinMode(DIN, OUTPUT);
   pinMode(CLK, OUTPUT);
@@ -165,99 +263,77 @@ void setup() {
   sendCmd(MAX7219_REG_DISPLAY_TEST, 0x00);
   sendCmd(MAX7219_REG_DECODE_MODE, 0x00);
   sendCmd(MAX7219_REG_SCAN_LIMIT, 0x07);
-  sendCmd(MAX7219_REG_INTENSITY, 0x08);  // brightness
+  sendCmd(MAX7219_REG_INTENSITY, 0x08);
   sendCmd(MAX7219_REG_SHUTDOWN, 0x01);
 
   // Clear display
   for (uint8_t i = 0; i < 8; i++) matrix[i] = 0;
   updateDisplay();
 
-  // Initialize random seed - combine sources for better entropy
   randomSeed(analogRead(A0) ^ millis());
 
-  // Show starting lives
   showLivesRemaining();
-
-  // Spawn first invader
-  spawnInvader();
+  startWave();
 }
 
-// Spawn a new invader at a random column
-void spawnInvader() {
-  invaderCol = random(0, 8);
-  invaderRow = 0;
-}
-
-// Main game loop
 void loop() {
-  uint16_t invaderDropInterval = getDropInterval();  // Level-based speed
-  uint16_t bulletMoveInterval = 30;  // Fast bullet movement
+  if (lives == 0) return;  // Game over state
 
-  // Clear matrix for fresh frame
+  uint16_t bulletMoveInterval = 30;
+
+  // Clear matrix
   for (uint8_t i = 0; i < 8; i++) matrix[i] = 0;
 
-  // Draw gun at bottom row
+  // Draw gun
   matrix[7] |= (1 << gunPos);
 
-  // Draw invader if still alive
-  if (invaderRow < 8) {
-    matrix[invaderRow] |= (1 << invaderCol);
-  }
-
-  // Draw bullet if active
-  if (bulletActive) {
-    if (bulletRow < 8) {
-      matrix[bulletRow] |= (1 << bulletCol);
+  // Draw all active invaders
+  for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+    if (invaders[i].col >= 0 && invaders[i].row < 8) {
+      matrix[invaders[i].row] |= (1 << invaders[i].col);
     }
   }
 
-  // Update display
-  updateDisplay();
+  // Draw bullet
+  if (bulletActive && bulletRow < 8) {
+    matrix[bulletRow] |= (1 << bulletCol);
+  }
 
-  // Small delay for game timing
+  updateDisplay();
   delay(1);
 
-  // Handle button input for gun movement and firing
+  // Button handling
   bool rightPressed = (digitalRead(RIGHT_BUTTON) == LOW);
   bool leftPressed = (digitalRead(LEFT_BUTTON) == LOW);
-
-  // Chording both buttons fires a bullet
   bool firePressed = rightPressed && leftPressed;
 
   if (firePressed && !lastFireState && !bulletActive) {
-    // Fire a bullet
     bulletActive = true;
     bulletCol = gunPos;
-    bulletRow = 6;  // Start just above the gun
-    chordedThisPress = true;  // Mark that we fired during this press
+    bulletRow = 6;
+    chordedThisPress = true;
   }
   lastFireState = firePressed;
 
-  // Detect button releases for single-tap movement
-  // Move on release ONLY if we didn't chord (fire) during this press
+  // Movement on release
   if (!firePressed && !chordedThisPress) {
-    // Left button released - was it a single tap?
     if (lastLeftPressed && !leftPressed && !rightPressed) {
-      // Left was just released and right isn't held - move left
       if (gunPos < 7) gunPos++;
       heldButton = 0;
       keyHoldTimer = 0;
     }
-    // Right button released - was it a single tap?
     if (lastRightPressed && !rightPressed && !leftPressed) {
-      // Right was just released and left isn't held - move right
       if (gunPos > 0) gunPos--;
       heldButton = 0;
       keyHoldTimer = 0;
     }
   }
 
-  // Reset chord flag when all buttons released
   if (!leftPressed && !rightPressed) {
     chordedThisPress = false;
   }
 
-  // Handle key repeat for held buttons (only single button, not chord)
+  // Key repeat
   if (!firePressed) {
     uint8_t currentButton = 0;
     if (leftPressed && !rightPressed) currentButton = 1;
@@ -265,96 +341,104 @@ void loop() {
 
     if (currentButton != 0) {
       if (currentButton == heldButton) {
-        // Same button held - check for repeat
         keyHoldTimer++;
         if (keyHoldTimer == KEY_REPEAT_DELAY) {
-          // First repeat after initial delay
           if (currentButton == 1 && gunPos < 7) gunPos++;
           else if (currentButton == 2 && gunPos > 0) gunPos--;
         } else if (keyHoldTimer > KEY_REPEAT_DELAY) {
-          // Continuous repeat at faster rate
           if ((keyHoldTimer - KEY_REPEAT_DELAY) % KEY_REPEAT_RATE == 0) {
             if (currentButton == 1 && gunPos < 7) gunPos++;
             else if (currentButton == 2 && gunPos > 0) gunPos--;
           }
         }
       } else {
-        // New button or switching - start hold timer
         heldButton = currentButton;
         keyHoldTimer = 0;
       }
     } else {
-      // No single button held
       heldButton = 0;
       keyHoldTimer = 0;
     }
   }
 
-  // Save button states for next frame
   lastLeftPressed = leftPressed;
   lastRightPressed = rightPressed;
 
-  // Move invader down
-  invaderDropCounter++;
-  if (invaderDropCounter >= invaderDropInterval) {
-    invaderDropCounter = 0;
-    invaderRow++;
+  // Trickle spawn
+  if (invadersToSpawn > 0) {
+    spawnTimer++;
+    if (spawnTimer >= getSpawnDelay()) {
+      spawnTimer = 0;
+      spawnOneInvader();
+    }
   }
 
-  // Move bullet up
+  // Move invaders (staggered)
+  for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+    if (invaders[i].col >= 0) {
+      invaders[i].dropTimer++;
+      if (invaders[i].dropTimer >= invaders[i].dropDelay) {
+        invaders[i].dropTimer = 0;
+        invaders[i].row++;
+
+        // Check if reached bottom
+        if (invaders[i].row >= 7) {
+          invaderReachedBottom(i);
+          if (lives == 0) return;
+        }
+      }
+    }
+  }
+
+  // Move bullet
   if (bulletActive) {
     bulletMoveCounter++;
     if (bulletMoveCounter >= bulletMoveInterval) {
       bulletMoveCounter = 0;
-
       if (bulletRow > 0) {
         bulletRow--;
       } else {
-        // Bullet went off screen
         bulletActive = false;
       }
     }
   }
 
-  // Check for collision (bullet hits invader)
-  if (bulletActive && bulletRow == invaderRow && bulletCol == invaderCol) {
-    // Hit! Apply score multiplier (level = multiplier)
-    bulletActive = false;
-    score += currentLevel;
-    levelKills++;
+  // Collision detection - check bullet against all invaders
+  if (bulletActive) {
+    for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+      if (invaders[i].col >= 0 &&
+          bulletRow == invaders[i].row &&
+          bulletCol == invaders[i].col) {
+        // Hit!
+        bulletActive = false;
+        score += waveNumber;  // Wave multiplier
 
-    // Flash the hit
-    for (uint8_t i = 0; i < 3; i++) {
-      sendCmd(invaderRow + 1, 0xFF);
-      delay(50);
-      sendCmd(invaderRow + 1, 0x00);
-      delay(50);
+        // Flash hit
+        for (uint8_t f = 0; f < 3; f++) {
+          sendCmd(invaders[i].row + 1, 0xFF);
+          delay(50);
+          sendCmd(invaders[i].row + 1, 0x00);
+          delay(50);
+        }
+
+        invaders[i].col = -1;  // Deactivate
+        invadersActive--;
+        break;
+      }
     }
-
-    // Check for level up
-    if (levelKills >= KILLS_PER_LEVEL && currentLevel < NUM_SPEED_LEVELS) {
-      currentLevel++;
-      levelKills = 0;
-      flashLevelUp();
-    }
-
-    // Spawn new invader
-    spawnInvader();
-    invaderDropCounter = 0;
   }
 
-  // Check if invader reached the bottom (lose a life)
-  if (invaderRow >= 7) {
-    if (!loseLife()) {
-      return;  // Game over was triggered
-    }
+  // Check wave complete
+  if (waveComplete()) {
+    waveNumber++;
+    delay(500);
+    startWave();
   }
 }
 
-// Game over sequence
 void gameOver() {
-  // Flash entire display (game over effect)
-  for (uint8_t flash = 0; flash < 4; flash++) {
+  // Flash
+  for (uint8_t f = 0; f < 4; f++) {
     for (uint8_t i = 0; i < 8; i++) matrix[i] = 0xFF;
     updateDisplay();
     delay(150);
@@ -363,28 +447,27 @@ void gameOver() {
     delay(150);
   }
 
-  // Display final level reached (columns lit = level)
+  // Show wave reached (columns = wave, max 8)
   for (uint8_t i = 0; i < 8; i++) matrix[i] = 0;
-  uint8_t levelDisplay = currentLevel;
-  if (levelDisplay > 8) levelDisplay = 8;
-  for (uint8_t i = 0; i < levelDisplay; i++) {
-    for (uint8_t row = 0; row < 8; row++) {
-      matrix[row] |= (1 << i);
+  uint8_t waveDisplay = waveNumber;
+  if (waveDisplay > 8) waveDisplay = 8;
+  for (uint8_t c = 0; c < waveDisplay; c++) {
+    for (uint8_t r = 0; r < 8; r++) {
+      matrix[r] |= (1 << c);
     }
   }
   updateDisplay();
   delay(2000);
 
-  // Reset game state
+  // Reset
   for (uint8_t i = 0; i < 8; i++) matrix[i] = 0;
   updateDisplay();
+
   score = 0;
   lives = STARTING_LIVES;
-  currentLevel = 1;
-  levelKills = 0;
+  waveNumber = 1;
   gunPos = 3;
   bulletActive = false;
-  invaderDropCounter = 0;
   bulletMoveCounter = 0;
   keyHoldTimer = 0;
   heldButton = 0;
@@ -392,7 +475,10 @@ void gameOver() {
   lastRightPressed = false;
   chordedThisPress = false;
 
-  // Show lives and start new game
+  for (uint8_t i = 0; i < MAX_INVADERS; i++) {
+    invaders[i].col = -1;
+  }
+
   showLivesRemaining();
-  spawnInvader();
+  startWave();
 }
